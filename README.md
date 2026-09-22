@@ -1,6 +1,6 @@
 # Nokia FastMile 5G ODU Auto-APN Switcher for OpenWrt
 
-This repository provides a complete, automated solution for Nokia FastMile 5G ODUs (Models 5G32-A / 5G16-A) to force-open the data path for secondary carrier SIMs (like Jio or BSNL). 
+This repository provides a complete, automated solution for Airtel 5G Nokia ODU /  Nokia FastMile 5G ODUs (Models 5G32-A / 5G16-A) to force-open the data path for secondary carrier SIMs (like Jio or BSNL). Tested on Airtel AOD311NK Software Version R1.
 
 On certain firmware versions (like R1), the ODU requires manual APN and routing modifications on every boot to establish an internet connection. This project automates the complex cryptographic login challenge (AES/SHA256 cascading hashes) and database manipulation via OpenWrt.
 
