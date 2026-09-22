@@ -8,8 +8,8 @@ On certain firmware versions (like R1), the ODU requires manual APN and routing 
 This script is designed to run on **any OpenWrt router or Linux device** capable of running Python 3. 
 
 **Tested Devices:**
-* Dell Wyse 3020 / 3040 (x86_64 OpenWrt)
-* LeMaker Banana Pi M1 (sunxi/cortexa7 OpenWrt)
+* Dell Wyse 3020 / 3040 (x86_64 OpenWrt) (for 2nd ethernet port i used USB Ethernet Adapter)
+* LeMaker Banana Pi M1 (sunxi/cortexa7 OpenWrt) (for 2nd ethernet port i used USB Ethernet Adapter)
 * MediaTek MT7986a (Filogic 830) Home Routers
 
 ---
