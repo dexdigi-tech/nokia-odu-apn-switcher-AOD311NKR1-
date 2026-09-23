@@ -1,4 +1,4 @@
-# Nokia FastMile 5G ODU Auto-APN Switcher for OpenWrt
+# Nokia FastMile 5G ODU Auto-APN Switcher and Changing Network Mode also for OpenWrt
 
 This repository provides a complete, automated solution for Airtel 5G Nokia ODU /  Nokia FastMile 5G ODUs (Models 5G32-A / 5G16-A) to force-open the data path for secondary carrier SIMs (like Jio or BSNL). Tested on Airtel AOD311NK Software Version R1.
 
@@ -68,97 +68,217 @@ Paste the following code into the file. **Make sure to change `ODU_IP`, `PASSWOR
 
 ```python
 #!/usr/bin/env python3
-import requests, urllib3, base64, hashlib, os, json, time, subprocess
+import requests
+import urllib3
+import base64
+import hashlib
+import os
+import json
+import time
+import subprocess
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# --- CONFIGURATION ---
 ODU_IP = "192.168.0.1"
 USERNAME = "admin"
-PASSWORD = "YOUR_ROUTER_PASSWORD"
+PASSWORD = "ANKODAXXXXXXXXXX"
+
+# Define the dual APN toggle targets
 APN1 = "jionet"
 APN2 = "bsnlnet"
-# ---------------------
 
 def nokia_b64url(b64_str):
     return b64_str.replace('+', '-').replace('/', '_').replace('=', '.')
 
 def sha256_b64(str1, str2):
-    return base64.b64encode(hashlib.sha256(f"{str1}:{str2}".encode('utf-8')).digest()).decode('utf-8')
+    combined = f"{str1}:{str2}".encode('utf-8')
+    digest = hashlib.sha256(combined).digest()
+    return base64.b64encode(digest).decode('utf-8')
 
 def sha256url(str1, str2):
     return nokia_b64url(sha256_b64(str1, str2))
 
 def wait_for_odu():
-    print("Waiting 60 seconds for ODU to boot...")
-    time.sleep(60)
+    print("1. Waiting 1 seconds for ODU initial boot sequence...")
+    time.sleep(1)
+    
+    print("2. Checking if ODU is reachable via Ping...")
     while True:
-        if subprocess.run(["ping", "-c", "1", "-W", "2", ODU_IP], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
-            print("ODU is online!")
+        res = subprocess.run(
+            ["ping", "-c", "1", "-W", "2", ODU_IP],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        if res.returncode == 0:
+            print("=> ODU is online and responding!")
             break
+        print("=> ODU not ready yet. Retrying in 5 seconds...")
         time.sleep(5)
 
 def main():
     wait_for_odu()
+    
+    print("3. Initializing Session...")
     session = requests.Session()
     session.verify = False
-    headers = {"User-Agent": "Mozilla/5.0", "Content-Type": "application/x-www-form-urlencoded", "Origin": f"https://{ODU_IP}", "Referer": f"https://{ODU_IP}/"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Origin": f"https://{ODU_IP}",
+        "Referer": f"https://{ODU_IP}/"
+    }
+    
+    print("4. Fetching Server Nonce...")
+    res0 = session.get(f"https://{ODU_IP}/login_web_app.cgi?nonce", headers=headers)
+    nonce_data = res0.json()
+    
+    raw_nonce = nonce_data['nonce']
+    random_key = nonce_data['randomKey']
+    iterations = nonce_data.get('iterations', 1)
+    safe_nonce = nokia_b64url(raw_nonce)
+    
+    print("5. Fetching Server Challenge (Alati)...")
+    userhash = sha256url(USERNAME, raw_nonce)
+    
+    payload1 = f"userhash={userhash}&nonce={safe_nonce}"
+    res1 = session.post(f"https://{ODU_IP}/login_web_app.cgi?salt", data=payload1, headers=headers)
+    alati = res1.json().get('alati')
+    
+    print("6. Calculating Cascading Cryptographic Hashes...")
+    k_string = (alati + PASSWORD).encode('utf-8')
+    K = hashlib.sha256(k_string).hexdigest()
+    
+    for _ in range(1, iterations):
+        K = hashlib.sha256(bytes.fromhex(K)).hexdigest()
+        
+    ce = sha256_b64(USERNAME, K.lower())
+    response_hash = sha256url(ce, raw_nonce)
+    random_key_hash = sha256url(random_key, raw_nonce)
+    
+    std_enckey = base64.b64encode(os.urandom(16)).decode('utf-8')
+    std_enciv = base64.b64encode(os.urandom(16)).decode('utf-8')
+    url_enckey = nokia_b64url(std_enckey)
+    url_enciv = nokia_b64url(std_enciv)
+    
+    print("7. Authenticating...")
+    payload2 = (
+        f"userhash={userhash}&RandomKeyhash={random_key_hash}"
+        f"&response={response_hash}&nonce={safe_nonce}"
+        f"&enckey={url_enckey}&enciv={url_enciv}"
+    )
+    res2 = session.post(f"https://{ODU_IP}/login_web_app.cgi", data=payload2, headers=headers)
     
     try:
-        # 1. Fetch Nonce
-        res0 = session.get(f"https://{ODU_IP}/login_web_app.cgi?nonce", headers=headers, timeout=5)
-        nonce_data = res0.json()
-        raw_nonce, random_key, iterations = nonce_data['nonce'], nonce_data['randomKey'], nonce_data.get('iterations', 1)
-        safe_nonce = nokia_b64url(raw_nonce)
-        userhash = sha256url(USERNAME, raw_nonce)
-        
-        # 2. Fetch Alati (Salt)
-        res1 = session.post(f"https://{ODU_IP}/login_web_app.cgi?salt", data=f"userhash={userhash}&nonce={safe_nonce}", headers=headers, timeout=5)
-        alati = res1.json().get('alati')
-        
-        # 3. Calculate Cascading Hashes
-        K = hashlib.sha256((alati + PASSWORD).encode('utf-8')).hexdigest()
-        for _ in range(1, iterations):
-            K = hashlib.sha256(bytes.fromhex(K)).hexdigest()
-        ce = sha256_b64(USERNAME, K.lower())
-        response_hash = sha256url(ce, raw_nonce)
-        random_key_hash = sha256url(random_key, raw_nonce)
-        
-        # 4. Authenticate
-        enckey = nokia_b64url(base64.b64encode(os.urandom(16)).decode())
-        enciv = nokia_b64url(base64.b64encode(os.urandom(16)).decode())
-        res2 = session.post(f"https://{ODU_IP}/login_web_app.cgi", data=f"userhash={userhash}&RandomKeyhash={random_key_hash}&response={response_hash}&nonce={safe_nonce}&enckey={enckey}&enciv={enciv}", headers=headers, timeout=5)
-        
-        sid, token = res2.json().get("sid"), res2.json().get("token")
-        if not sid: 
-            print("Login failed.")
-            return
-            
+        login_data = res2.json()
+    except Exception:
+        print("=> Login Failed! Non-JSON response.")
+        print(res2.text)
+        return
+
+    sid = login_data.get("sid")
+    token = login_data.get("token")
+    
+    if sid:
+        print(f"=> Login Successful! Session ID: {sid}")
         session.cookies.set("sid", sid, path="/", domain=ODU_IP)
-        api_headers = {"User-Agent": "Mozilla/5.0", "Content-Type": "application/json", "Origin": f"https://{ODU_IP}", "Referer": f"https://{ODU_IP}/web_whw/", "Cookie": f"sid={sid}; token={token}"}
-        
-        # 5. Fetch Live Database APN List
-        res3 = session.post(f"https://{ODU_IP}/service_function_web_app.cgi", json={"version": 1, "csrf_token": token, "id": 1, "interface": "Nokia.GenericService", "service": "OAM", "function": "GetAPN", "paralist": []}, headers=api_headers, timeout=5)
+    else:
+        print("=> Login Failed!")
+        print(res2.text)
+        return
+
+    print("8. Fetching Live APN Database Context...")
+    api_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Content-Type": "application/json",
+        "Origin": f"https://{ODU_IP}",
+        "Referer": f"https://{ODU_IP}/web_whw/",
+        "Cookie": f"sid={sid}; token={token}"
+    }
+    
+    token_payload = {
+        "version": 1,
+        "csrf_token": token,
+        "id": 1,
+        "interface": "Nokia.GenericService",
+        "service": "OAM",
+        "function": "GetAPN",
+        "paralist": []
+    }
+    res3 = session.post(f"https://{ODU_IP}/service_function_web_app.cgi", json=token_payload, headers=api_headers)
+    
+    try:
         res3_json = res3.json()
         csrf_token = res3_json.get("csrf_token") or token
         apn_list = res3_json.get("FunctionResult", {}).get("APNList", [])
-        
-        if not apn_list: 
-            return
-            
-        # 6. Toggle APN and Push Update
-        target_record = apn_list[0]
-        current_apn = target_record.get("AccessPointName", "")
-        target_apn = APN2 if current_apn == APN1 else APN1
-        
-        target_record["AccessPointName"] = target_apn
-        target_record["WorkMode"] = "RouteMode"
-        target_record["Services"] = "TR069,INTERNET"
-        
-        res4 = session.post(f"https://{ODU_IP}/service_function_web_app.cgi", json={"version": 1, "csrf_token": csrf_token, "id": 2, "interface": "Nokia.GenericService", "service": "OAM", "function": "ModifyAPN", "paralist": [target_record]}, headers=api_headers, timeout=5)
-        print("APN Successfully Switched to:", target_apn)
-        
-    except Exception as e:
-        print(f"Error: {e}")
+    except Exception:
+        print("=> Failed to parse GetAPN JSON response.")
+        print(res3.text)
+        return
+
+    if not apn_list:
+        print("=> Error: No APN records found in database.")
+        return
+
+    # Determine current APN and calculate toggle target
+    target_apn_record = apn_list[0]
+    current_apn = target_apn_record.get("AccessPointName", "")
+    print(f"=> Current Active APN on ODU: {current_apn}")
+
+    if current_apn == APN1:
+        target_apn = APN2
+    else:
+        target_apn = APN1
+
+    print(f"=> Toggling APN configuration to: {target_apn}")
+    target_apn_record["AccessPointName"] = target_apn
+    target_apn_record["WorkMode"] = "RouteMode"
+    target_apn_record["Services"] = "TR069,INTERNET"
+    target_apn_record["NatEnable"] = "1"
+
+    print(f"9. Pushing Updated APN Record ({target_apn}) to ODU Database...")
+    modify_payload = {
+        "version": 1,
+        "csrf_token": csrf_token,
+        "id": 2,
+        "interface": "Nokia.GenericService",
+        "service": "OAM",
+        "function": "ModifyAPN",
+        "paralist": [target_apn_record]
+    }
+
+    res4 = session.post(f"https://{ODU_IP}/service_function_web_app.cgi", json=modify_payload, headers=api_headers)
+    print("=> APN Push Complete! Router Response:")
+    print(json.dumps(res4.json(), indent=2))
+
+    # ---------------------------------------------------------
+    # 10. Force 5G SA Network Mode
+    # ---------------------------------------------------------
+    network_cgi_url = f"https://{ODU_IP}/service_function_web_app.cgi"
+    
+    sa_payload = {
+        "version": 1,
+        "csrf_token": csrf_token,
+        "id": 3,
+        "interface": "Nokia.GenericService",
+        "service": "OAM",
+        "function": "SetCellularAccessConfig", 
+        "paralist": [{"AccessModeNo": 3}]   // 1.5G SA and 5G NSA Both , 2. 5G NSA Only, 3. 5G SA only, 4. 4G LTE Only -  Chnage Values Accordingly
+    }
+
+    print("10. Pushing 5G SA Network Lock...")
+    sa_req = session.post(
+        network_cgi_url,
+        headers=api_headers,
+        json=sa_payload,
+        verify=False,
+        timeout=10
+    )
+    
+    if sa_req.status_code == 200:
+        print("=> 5G SA Mode locked successfully!")
+        print(sa_req.text)
+    else:
+        print(f"=> Failed to lock 5G SA. Status: {sa_req.status_code}")
 
 if __name__ == '__main__':
     main()
