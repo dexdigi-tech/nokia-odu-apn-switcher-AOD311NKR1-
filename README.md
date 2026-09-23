@@ -99,8 +99,8 @@ def sha256url(str1, str2):
     return nokia_b64url(sha256_b64(str1, str2))
 
 def wait_for_odu():
-    print("1. Waiting 1 seconds for ODU initial boot sequence...")
-    time.sleep(1)
+    print("1. Waiting 60 seconds for ODU initial boot sequence...")
+    time.sleep(60)
     
     print("2. Checking if ODU is reachable via Ping...")
     while True:
